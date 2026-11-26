@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <link rel="stylesheet" href="css/index.css">
+
+  <title>ImageCompressor</title>
+
+  <script src="p5.min.js"></script>
+  <script src="jszip.min.js"></script>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100dvh;
+      max-height: 100dvh;
+      overflow: hidden;
+      font-family: sans-serif;
+      background: #f0f0f0;
+      color: #111;
+      text-align: center;
+    }
+
+    .app-container {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      align-items: center;
+      height: 100dvh;
+      padding: 10px 12px 14px 12px;
+      gap: 6px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(20px, 5vw, 28px);
+      line-height: 1.15;
+    }
+
+    .hint {
+      margin: 0;
+      font-size: clamp(12px, 3.2vw, 15px);
+      line-height: 1.25;
+      color: #444;
+    }
+
+    .controls {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      width: 100%;
+    }
+
+    #fileInput {
+      max-width: 100%;
+      font-size: clamp(13px, 3.5vw, 16px);
+    }
+
+    .size-box {
+      font-size: clamp(15px, 4vw, 18px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    #targetSizeInput {
+      width: 95px;
+      font-size: clamp(15px, 4vw, 18px);
+      padding: 4px 8px;
+      text-align: center;
+      border: 2px solid #888;
+      border-radius: 6px;
+      background: #fff;
+    }
+
+    .mode-box {
+      font-size: clamp(13px, 3.5vw, 16px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+
+    .mode-box label {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      cursor: pointer;
+    }
+
+    .preview-area {
+      flex: 1 1 auto;
+      min-height: 0;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+    }
+
+    #staticPreview {
+      max-width: 85%;
+      max-height: 100%;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      border-radius: 8px;
+      display: block;
+    }
+
+    #statusInfo {
+      min-height: 18px;
+      font-size: clamp(12px, 3.2vw, 15px);
+      color: #222;
+      padding: 0 6px;
+      word-break: break-word;
+    }
+
+    .button-bar {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+      flex-shrink: 0;
+    }
+
+    #okButton, #zipButton {
+      padding: 11px 20px;
+      font-size: clamp(16px, 4.5vw, 21px);
+      font-weight: bold;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      line-height: 1;
+    }
+
+    #zipButton {
+      background: #444;
+    }
+
+    #okButton {
+      background: #0078d7;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="app-container">
+    <h1>ImageCompressor</h1>
+
+    <p class="hint">
+      PNG- oder JPG-Bilder auswählen · Zielgröße in KB eingeben<br>
+      Modus wählen · OK oder ZIP-Download
+    </p>
+
+    <div class="controls">
+      <input id="fileInput" type="file" accept="image/png, image/jpeg" multiple>
+      <div class="size-box">
+        <label for="targetSizeInput">Zielgröße (KB):</label>
+        <input id="targetSizeInput" type="number" value="200" min="5" max="50000">
+      </div>
+      <div class="mode-box">
+        <label>
+          <input type="radio" name="mode" value="quality" checked>
+          Datei verkleinern (Maße gleich)
+        </label>
+        <label>
+          <input type="radio" name="mode" value="dimensions">
+          Abmessungen verkleinern
+        </label>
+      </div>
+    </div>
+
+    <div class="preview-area">
+      <img id="staticPreview" src="compress.jpg" alt="Symbolbild">
+      <div id="statusInfo"></div>
+    </div>
+
+    <div class="button-bar" id="buttonBar"></div>
+  </div>
+
+  <script>
+    let rawFiles = [];
+    let fileInfos = [];
+
+    document.getElementById('fileInput').addEventListener('change', handleFiles);
+    document.getElementById('targetSizeInput').addEventListener('change', updateSizePreview);
+    document.querySelectorAll('input[name="mode"]').forEach(radio => {
+      radio.addEventListener('change', updateSizePreview);
+    });
+
+    function handleFiles(evt) {
+      rawFiles = [];
+      fileInfos = [];
+
+      let files = Array.from(evt.target.files || []);
+      if (files.length === 0) {
+        setStatus("");
+        return;
+      }
+
+      rawFiles = files;
+      fileInfos = files.map(f => ({
+        name: f.name,
+        originalSize: f.size
+      }));
+
+      updateSizePreview();
+    }
+
+    function setup() {
+      noCanvas();
+
+      let bar = select('#buttonBar');
+
+      let zipButton = createButton('ZIP');
+      zipButton.id('zipButton');
+      zipButton.parent(bar);
+      zipButton.mousePressed(saveAsZip);
+
+      let okButton = createButton('OK');
+      okButton.id('okButton');
+      okButton.parent(bar);
+      okButton.mousePressed(saveAll);
+    }
+
+    function setStatus(msg) {
+      document.getElementById('statusInfo').textContent = msg;
+    }
+
+    function getTargetBytes() {
+      let kb = parseFloat(document.getElementById('targetSizeInput').value);
+      if (isNaN(kb) || kb < 1) kb = 100;
+      return kb * 1024;
+    }
+
+    function getMode() {
+      let checked = document.querySelector('input[name="mode"]:checked');
+      return checked ? checked.value : 'quality';
+    }
+
+    function isPngFile(fileName) {
+      return /\.png$/i.test(fileName || "");
+    }
+
+    function loadHtmlImageFromFile(file) {
+      return new Promise((resolve, reject) => {
+        let url = URL.createObjectURL(file);
+        let img = new Image();
+        img.onload = () => {
+          URL.revokeObjectURL(url);
+          resolve(img);
+        };
+        img.onerror = (err) => {
+          URL.revokeObjectURL(url);
+          reject(err);
+        };
+        img.src = url;
+      });
+    }
+
+    async function updateSizePreview() {
+      if (rawFiles.length === 0) return;
+      let targetBytes = getTargetBytes();
+      setStatus("Berechne Zielgröße...");
+      let img = await loadHtmlImageFromFile(rawFiles[0]);
+      let res = await processImageToTarget(img, targetBytes, getMode(), rawFiles[0].name);
+      let origKB = (rawFiles[0].size / 1024).toFixed(1);
+      let newKB = (res.blob.size / 1024).toFixed(1);
+      setStatus(`${rawFiles.length} Datei(en) | ${rawFiles[0].name} (${res.width}x${res.height} px): ${origKB} KB → ca. ${newKB} KB`);
+    }
+
+    /* -----------------------------
+       HILFSFUNKTION FÜR EXAKTEN NAMEN
+    ------------------------------ */
+    function triggerDownload(blob, exactFileName) {
+      const rawBlob = new Blob([blob], { type: "application/octet-stream" });
+      const url = URL.createObjectURL(rawBlob);
+
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = exactFileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    /* -----------------------------
+       MODUS 1: KOMPRIMIERUNG AUF ZIELGRÖSSE
+       (Abmessungen & PNG-Transparenz bleiben erhalten)
+    ------------------------------ */
+    function compressImageToTarget(htmlImg, targetBytes, fileName = "") {
+      return new Promise((resolve) => {
+        const keepTransparency = isPngFile(fileName);
+
+        let canvas = document.createElement('canvas');
+        canvas.width = htmlImg.width;
+        canvas.height = htmlImg.height;
+        let ctx = canvas.getContext('2d');
+
+        if (!keepTransparency) {
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+        ctx.drawImage(htmlImg, 0, 0, canvas.width, canvas.height);
+
+        if (keepTransparency) {
+          canvas.toBlob((blob) => {
+            resolve({ blob, width: canvas.width, height: canvas.height });
+          }, 'image/png');
+          return;
+        }
+
+        let minQ = 0.01;
+        let maxQ = 1.0;
+        let bestBlob = null;
+        let step = 0;
+        let maxSteps = 10;
+
+        function tryQuality() {
+          let midQ = (minQ + maxQ) / 2;
+
+          canvas.toBlob((blob) => {
+            if (!bestBlob || Math.abs(blob.size - targetBytes) < Math.abs(bestBlob.size - targetBytes)) {
+              bestBlob = blob;
+            }
+
+            step++;
+            if (step >= maxSteps) {
+              resolve({ blob: bestBlob, width: canvas.width, height: canvas.height });
+              return;
+            }
+
+            if (blob.size > targetBytes) {
+              maxQ = midQ;
+            } else {
+              minQ = midQ;
+            }
+            tryQuality();
+          }, 'image/jpeg', midQ);
+        }
+
+        tryQuality();
+      });
+    }
+
+    /* -----------------------------
+       MODUS 2: ABMESSUNGEN VERKLEINERN
+       BIS ZIELGRÖSSE ERREICHT IST
+       (PNG-Transparenz bleibt erhalten)
+    ------------------------------ */
+    function resizeImageToTarget(htmlImg, targetBytes, fileName = "") {
+      return new Promise((resolve) => {
+        const keepTransparency = isPngFile(fileName);
+        let canvas = document.createElement('canvas');
+        let ctx = canvas.getContext('2d');
+
+        let minScale = 0.05;
+        let maxScale = 1.0;
+        let bestResult = null;
+        let step = 0;
+        let maxSteps = 10;
+
+        function encodeAtScale(scale, callback) {
+          let w = Math.max(1, Math.round(htmlImg.width * scale));
+          let h = Math.max(1, Math.round(htmlImg.height * scale));
+
+          canvas.width = w;
+          canvas.height = h;
+          ctx.clearRect(0, 0, w, h);
+
+          if (!keepTransparency) {
+            ctx.fillStyle = "#ffffff";
+            ctx.fillRect(0, 0, w, h);
+          }
+          ctx.drawImage(htmlImg, 0, 0, w, h);
+
+          if (keepTransparency) {
+            canvas.toBlob((blob) => callback({ blob, width: w, height: h }), 'image/png');
+          } else {
+            canvas.toBlob((blob) => callback({ blob, width: w, height: h }), 'image/jpeg', 0.9);
+          }
+        }
+
+        function tryScale() {
+          let midScale = (minScale + maxScale) / 2;
+
+          encodeAtScale(midScale, (current) => {
+            if (!bestResult || Math.abs(current.blob.size - targetBytes) < Math.abs(bestResult.blob.size - targetBytes)) {
+              bestResult = current;
+            }
+
+            step++;
+            if (step >= maxSteps) {
+              resolve(bestResult);
+              return;
+            }
+
+            if (current.blob.size > targetBytes) {
+              maxScale = midScale;
+            } else {
+              minScale = midScale;
+            }
+            tryScale();
+          });
+        }
+
+        tryScale();
+      });
+    }
+
+    function processImageToTarget(htmlImg, targetBytes, mode, fileName = "") {
+      if (mode === 'dimensions') {
+        return resizeImageToTarget(htmlImg, targetBytes, fileName);
+      }
+      return compressImageToTarget(htmlImg, targetBytes, fileName);
+    }
+
+    /* -----------------------------
+       EINZELBILDER SPEICHERN
+       (seriell, exakt gleicher Dateiname)
+    ------------------------------ */
+    async function saveAll() {
+      if (rawFiles.length === 0) return;
+
+      let targetBytes = getTargetBytes();
+      let mode = getMode();
+
+      for (let i = 0; i < rawFiles.length; i++) {
+        setStatus(`Verarbeite ${i + 1} / ${rawFiles.length}...`);
+        let img = await loadHtmlImageFromFile(rawFiles[i]);
+        let res = await processImageToTarget(img, targetBytes, mode, rawFiles[i].name);
+
+        triggerDownload(res.blob, fileInfos[i].name);
+        await new Promise(r => setTimeout(r, 250));
+      }
+
+      setStatus("Fertig gespeichert!");
+    }
+
+    /* -----------------------------
+       ZIP-DOWNLOAD
+    ------------------------------ */
+    async function saveAsZip() {
+      if (rawFiles.length === 0) return;
+
+      let targetBytes = getTargetBytes();
+      let mode = getMode();
+      let zip = new JSZip();
+
+      for (let i = 0; i < rawFiles.length; i++) {
+        setStatus(`Packe ${i + 1} / ${rawFiles.length} in ZIP...`);
+        let img = await loadHtmlImageFromFile(rawFiles[i]);
+        let res = await processImageToTarget(img, targetBytes, mode, rawFiles[i].name);
+
+        zip.file(fileInfos[i].name, res.blob);
+      }
+
+      setStatus("Erstelle ZIP-Datei...");
+      let content = await zip.generateAsync({ type: "blob" });
+      triggerDownload(content, "compressed_images.zip");
+
+      setStatus("ZIP heruntergeladen!");
+    }
+  </script>
+
+</body>
+</html>
